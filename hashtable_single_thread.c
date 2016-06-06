@@ -1,4 +1,4 @@
-//#define DEBUG
+#define DEBUG
 
 #define _BSD_SOURCE
 #include <stdio.h>
@@ -41,9 +41,9 @@ int character_identify(char *c){
 	else return 4;
 }
 
-unsigned int hash_function(char* word){
+unsigned int hash_function(char* word, unsigned int* delay){
 	//http://stackoverflow.com/questions/7666509/hash-function-for-string
-	unsigned int hashval = 5381;
+	unsigned int hashval = 5381 + *delay;
 	while(*word != '\0'){
 		//hashval = hashval * 33 + *word
 		hashval = (hashval << 5) + hashval + (unsigned int)*word++;
@@ -177,7 +177,20 @@ int main(void){
 				}else{
 					word[wordlength] = '\0';
 				}
-				unsigned int hash_score = hash_function(word);
+				unsigned int hash_score, delay = 0;
+				while(1){
+					hash_score = hash_function(word, &delay);
+					if(state == BEFORE){
+						if(table_before[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX].count == 0
+						   || strncmp(word, table_before[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX].word, WORD_LENGTH_MAX) == 0)
+							break;
+					}else{
+						if(table_after[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX].count == 0
+						   || strncmp(word, table_after[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX].word, WORD_LENGTH_MAX) == 0)
+							break;
+					}
+					delay++;
+				}
 				if(state == BEFORE){
 					word_counter(word, &table_before[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX]);
 				}else{
