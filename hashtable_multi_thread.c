@@ -9,12 +9,16 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 
+#include <pthread.h>
+
 #define HASHTABLE_NUM_MAX 1024
 #define TABLE_NUM 64
 #define WORD_LENGTH_MAX 32
 #define BEFORE 0
 #define AFTER 1
 #define SEARCHNUM 5
+
+int i, j;
 
 struct HashTable{
 	int count;
@@ -23,12 +27,21 @@ struct HashTable{
 };
 typedef struct HashTable HashTable;
 
-void initialize_table(HashTable* table){
-	int i;
-	for(i = 0; i < HASHTABLE_NUM_MAX; i++) {
-		table[i].count = 0;
-		table[i].word[0] = '\0';
-		table[i].next = NULL;
+HashTable table_before[TABLE_NUM][HASHTABLE_NUM_MAX], table_after[TABLE_NUM][HASHTABLE_NUM_MAX];
+
+char *c;
+
+void initialize_table(void){
+	for(j = 0;j < TABLE_NUM;j++){
+		for(i = 0; i < HASHTABLE_NUM_MAX; i++) {
+			table_before[j][i].count = 0;
+			table_before[j][i].word[0] = '\0';
+			table_before[j][i].next = NULL;
+			
+			table_after[j][i].count = 0;
+			table_after[j][i].word[0] = '\0';
+			table_after[j][i].next = NULL;
+		}
 	}
 }
 
@@ -76,6 +89,103 @@ void word_counter(char* word, HashTable* table_element){
 	}
 }
 
+void *before_thread(void* fs){
+	char word[WORD_LENGTH_MAX];
+	int wordlength = 0, state = BEFORE, counter = 0, filesize = *((int*)fs);
+	while(counter < filesize){
+		switch(character_identify(&c[counter])){
+		case 0:
+			word[wordlength] = c[counter];
+			if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
+			break;
+		case 1:
+			word[wordlength] = (char)((int)c[counter] + 'a' - 'A');
+			if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
+			break;
+		case 2:
+			if(wordlength > 0){
+				word[wordlength] = c[counter];
+				if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
+			}else{
+				//do nothing
+			}
+			break;
+		case 3:
+			state = AFTER;
+		default:
+			if(wordlength > 0){
+				if(word[wordlength - 1] == '\'' || word[wordlength - 1] == '-' || wordlength == WORD_LENGTH_MAX){
+					word[wordlength - 1] = '\0';
+				}else{
+					word[wordlength] = '\0';
+				}
+				unsigned int hash_score = hash_function(word);
+				word_counter(word, &table_before[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX]);
+				wordlength = 0;
+			}else{
+				//do nothing
+			}
+			break;
+		}
+		counter++;
+		if(state == AFTER) {
+			printf("before_thread finished:[%d]\n", counter);
+			break;
+		}
+	}
+	pthread_exit(0);
+}
+
+void *after_thread(void* fs){
+	char word[WORD_LENGTH_MAX];
+	int wordlength = 0, state = AFTER, counter, filesize = *((int*)fs);
+	counter = filesize - 1;
+	while(counter >= 0){
+		switch(character_identify(&c[counter])){
+		case 0:
+			word[wordlength] = c[counter];
+			if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
+			break;
+		case 1:
+			word[wordlength] = (char)((int)c[counter] + 'a' - 'A');
+			if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
+			break;
+		case 2:
+			if(wordlength > 0){
+				word[wordlength] = c[counter];
+				if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
+			}else{
+				//do nothing
+			}
+			break;
+		case 3:
+			state = BEFORE;
+		default:
+			if(wordlength > 0){
+				char temp_word[WORD_LENGTH_MAX];
+				if(word[wordlength - 1] == '\'' || word[wordlength - 1] == '-' || wordlength >= WORD_LENGTH_MAX) wordlength--;
+				word[wordlength] = '\0';
+				for(i = 0;i < wordlength;i++) temp_word[i] = word[wordlength - (i + 1)];
+				temp_word[wordlength] = '\0';
+				strncpy(word, temp_word, WORD_LENGTH_MAX);
+				unsigned int hash_score = hash_function(word);
+				word_counter(word, &table_before[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX]);
+				wordlength = 0;
+			}else{
+				//do nothing
+			}
+			break;
+		}
+		counter--;
+		if(state == BEFORE){
+			printf("after_thread finished:[%d]\n", counter);
+			break;
+		}
+	}
+	pthread_exit(0);
+}
+
+
 HashTable* table_max_freqency(HashTable* table_element){
 	HashTable* temp;
 	if(table_element->next != NULL){
@@ -92,17 +202,35 @@ int if_exist(HashTable* table_element, char* word){
 	}else return 0;
 }
 
-void print_freqency(HashTable table1[][HASHTABLE_NUM_MAX], HashTable table2[][HASHTABLE_NUM_MAX]){
-	int i, j, k, l;
+void print_freqency(void){
+	int k, l;
 	HashTable f[SEARCHNUM], *temp;
 	for(i = 0;i < SEARCHNUM;i++){
 		f[i].count = 0;
 	}
 	for(j = 0;j < TABLE_NUM;j++){
 		for(i = 0;i < HASHTABLE_NUM_MAX;i++){
-			temp = table_max_freqency(&table1[j][i]);
+			temp = table_max_freqency(&table_before[j][i]);
 			for(l = 0;l < SEARCHNUM;l++){
-				if(f[l].count <= temp->count && if_exist(&table2[j][i], temp->word) == 0){
+				if(f[l].count <= temp->count && if_exist(&table_after[j][i], temp->word) == 0){
+					for(k = 1;k < SEARCHNUM - l;k++){
+						f[SEARCHNUM - k] = f[SEARCHNUM - (k + 1)];
+					}
+					f[l] = *temp;
+					break;
+				}
+			}
+		}
+	}
+	for(i = 0;i < SEARCHNUM;i++){
+		printf("%d:%s\n", f[i].count, f[i].word);
+	}
+	printf("--------------------\n");
+	for(j = 0;j < TABLE_NUM;j++){
+		for(i = 0;i < HASHTABLE_NUM_MAX;i++){
+			temp = table_max_freqency(&table_after[j][i]);
+			for(l = 0;l < SEARCHNUM;l++){
+				if(f[l].count <= temp->count && if_exist(&table_before[j][i], temp->word) == 0){
 					for(k = 1;k < SEARCHNUM - l;k++){
 						f[SEARCHNUM - k] = f[SEARCHNUM - (k + 1)];
 					}
@@ -132,13 +260,7 @@ void print_hashtable(HashTable* table_element){
 }
 
 int main(void){
-	int i, j, state = BEFORE, wordlength = 0;
-	char *c, word[WORD_LENGTH_MAX];
-	HashTable table_before[TABLE_NUM][HASHTABLE_NUM_MAX], table_after[TABLE_NUM][HASHTABLE_NUM_MAX];
-	for(i = 0;i < TABLE_NUM;i++){
-		initialize_table(table_before[i]);
-		initialize_table(table_after[i]);
-	}
+	initialize_table();
 
 	int filesize, pagesize, mmapsize;
 	filesize = (int)lseek(0, 0, SEEK_END);
@@ -149,52 +271,15 @@ int main(void){
 		perror("mmap");
 		exit(1);
 	}
-	int counter = 0;
-	while(counter < filesize){
-		switch(character_identify(&c[counter])){
-		case 0:
-			word[wordlength] = c[counter];
-			if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
-			break;
-		case 1:
-			word[wordlength] = (char)((int)c[counter] + 'a' - 'A');
-			if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
-			break;
-		case 2:
-			if(wordlength > 0){
-				word[wordlength] = c[counter];
-				if(wordlength < WORD_LENGTH_MAX - 1) wordlength++;
-			}else{
-				//do nothing
-			}
-			break;
-		case 3:
-			state = AFTER;
-		default:
-			if(wordlength > 0){
-				if(word[wordlength - 1] == '\'' || word[wordlength - 1] == '-'){
-					word[wordlength - 1] = '\0';
-				}else{
-					word[wordlength] = '\0';
-				}
-				unsigned int hash_score = hash_function(word);
-				if(state == BEFORE){
-					word_counter(word, &table_before[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX]);
-				}else{
-					word_counter(word, &table_after[hash_score / HASHTABLE_NUM_MAX][hash_score % HASHTABLE_NUM_MAX]);
-				}
-				wordlength = 0;
-			}else{
-				//do nothing
-			}
-			break;
-		}
-		counter++;
-	}
+	printf("filesize[%d]\n", filesize);
+	pthread_t before_t, after_t;
+	pthread_create(&before_t, NULL, &before_thread, &filesize);
+	pthread_create(&after_t, NULL, &after_thread, &filesize);
+
+	pthread_join(before_t, NULL);
+	pthread_join(after_t, NULL);
 	
-	print_freqency(table_before, table_after);
-	printf("-------------------\n");
-	print_freqency(table_after, table_before);
+	//print_freqency();
 	
 #ifdef DEBUG
 	for(j = 0;j < TABLE_NUM;j++){
@@ -215,5 +300,6 @@ int main(void){
 			hashtable_free(&table_after[j][i]);
 		}
 	}
+	
 	return 0;
 }
